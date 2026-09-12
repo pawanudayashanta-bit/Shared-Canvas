@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Real-Time Collaborative Canvas</title>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    
+    <style>
+        /* --- Base & Animated Background --- */
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none; /* Prevent scrolling while drawing */
+            
+            background: linear-gradient(-45deg, #ff9a9e, #fecfef, #a1c4fd, #c2e9fb, #fdcbf1);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+        }
+
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; 
+            display: flex; flex-direction: column; justify-content: space-between;
+            z-index: 10;
+        }
+
+        /* --- Header --- */
+        .header {
+            text-align: center; color: rgba(255, 255, 255, 0.95); 
+            padding-top: 60px; text-shadow: 0px 4px 10px rgba(0,0,0,0.3);
+        }
+        .header h1 { margin: 0; font-size: 65px; font-weight: 300; letter-spacing: 2px;}
+        .header p { margin: 5px 0; font-size: 16px; font-weight: 500; letter-spacing: 2px; text-transform: uppercase; }
+
+        /* --- Glassmorphism Control Panel --- */
+        .controls {
+            pointer-events: auto; 
+            display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 12px; 
+            padding: 20px; padding-bottom: 35px;
+            background: rgba(255, 255, 255, 0.15); 
+            backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
+            border-top: 1px solid rgba(255,255,255,0.4);
+            border-top-left-radius: 35px; border-top-right-radius: 35px;
+            box-shadow: 0 -10px 30px rgba(0,0,0,0.1);
+        }
+        
+        button {
+            padding: 10px 20px; border: none; border-radius: 25px;
+            font-size: 14px; font-weight: 600; cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15); transition: all 0.3s ease;
+            display: flex; align-items: center; gap: 5px;
+        }
+        button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.2); }
+        button:active { transform: scale(0.95); }
+        
+        .btn-bg { background-color: rgba(255, 255, 255, 0.9); color: #333; }
+        .btn-random { background-color: #ff9ff3; color: white; padding: 10px; border-radius: 50%; }
+        .btn-undo { background-color: rgba(255, 255, 255, 0.9); color: #555; }
+        .btn-clear { background-color: #ff6b81; color: #fff; }
+        
+        input[type="color"] { 
+            padding: 0; width: 42px; height: 42px; 
+            border: 3px solid rgba(255,255,255,0.8); border-radius: 50%; 
+            overflow: hidden; cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+        }
+        input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+        input[type="color"]::-webkit-color-swatch { border: none; border-radius: 50%; }
+
+        .slider-container {
+            display: flex; align-items: center; gap: 8px;
+            background: rgba(255,255,255,0.85); padding: 8px 15px; border-radius: 25px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .slider-container span { font-weight: bold; color: #444; font-size: 13px; }
+        
+        canvas { 
+            display: block; position: absolute; top: 0; left: 0; 
+            z-index: 5;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="drawingBoard"></canvas>
+
+    <div id="ui-layer">
+        <div class="header">
+            <h1 id="time">00:00</h1>
+            <p id="date">Our Shared Canvas</p>
+        </div>
+        
+        <div class="controls" id="controlBox">
+            <!-- Wallpaper Upload -->
+            <button class="btn-bg" id="bgBtn" title="Set Custom Background">🖼️ Background</button>
+            <input type="file" id="bgUploader" accept="image/*" style="display: none;">
+            
+            <!-- Tools -->
+            <input type="color" id="colorPicker" value="#ffffff" title="Pick Color">
+            <button class="btn-random" id="randomColorBtn" title="Magic Random Color">🎲</button>
+            
+            <div class="slider-container">
+                <span>Size</span>
+                <input type="range" id="brushSize" min="2" max="25" value="6">
+            </div>
+
+            <!-- Actions -->
+            <button class="btn-undo" id="undoBtn">↩ Undo</button>
+            <button class="btn-clear" id="clearBtn">🗑️ Clear</button>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // TODO: Replace with your Firebase Configuration
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            databaseURL: "YOUR_DATABASE_URL",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.firebasestorage.app",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+        const canvasRef = db.ref('shared_canvas');
+
+        // Canvas Setup
+        const canvas = document.getElementById('drawingBoard');
+        const ctx = canvas.getContext('2d');
+        const controlBox = document.getElementById('controlBox');
+        
+        let isDrawing = false;
+        let currentLine = [];
+        let myLineKeys = []; 
+        let globalData = null; // Store data for re-rendering on window resize
+
+        const colorPicker = document.getElementById('colorPicker');
+        const brushSize = document.getElementById('brushSize');
+        
+        // --- Features Setup ---
+
+        // 1. Random Color Generator
+        document.getElementById('randomColorBtn').addEventListener('click', () => {
+            const randomColor = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+            colorPicker.value = randomColor;
+        });
+
+        // 2. Custom Background Uploader
+        document.getElementById('bgBtn').addEventListener('click', () => {
+            document.getElementById('bgUploader').click();
+        });
+        
+        document.getElementById('bgUploader').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if(file) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    document.body.style.animation = 'none'; // Stop gradient animation
+                    document.body.style.background = `url(${event.target.result})`;
+                    document.body.style.backgroundSize = 'cover';
+                    document.body.style.backgroundPosition = 'center';
+                }
+                reader.readAsDataURL(file);
+            }
+        });
+        
+        // --- Core Functions ---
+
+        // Handle Window Resize
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            if(globalData) redrawAll(globalData);
+        }
+        window.addEventListener('resize', resizeCanvas);
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Update Lock-screen style Clock
+        function updateTime() {
+            const now = new Date();
+            const hours = now.getHours().toString().padStart(2, '0');
+            const minutes = now.getMinutes().toString().padStart(2, '0');
+            document.getElementById('time').innerText = `${hours}:${minutes}`;
+            const options = { weekday: 'long', day: 'numeric', month: 'long' };
+            document.getElementById('date').innerText = now.toLocaleDateString('en-US', options);
+        }
+        setInterval(updateTime, 1000);
+        updateTime();
+
+        // 💡 CRITICAL: Convert absolute pixels to relative coordinates (0 to 1 ratio)
+        // This ensures the drawing scales perfectly across devices (e.g., Phone to Tablet)
+        function getRelativeCoordinates(e) {
+            let clientX, clientY;
+            if (e.touches && e.touches.length > 0) {
+                clientX = e.touches[0].clientX; clientY = e.touches[0].clientY;
+            } else if (e.changedTouches && e.changedTouches.length > 0) {
+                clientX = e.changedTouches[0].clientX; clientY = e.changedTouches[0].clientY;
+            } else {
+                clientX = e.clientX; clientY = e.clientY;
+            }
+            return { x: clientX / canvas.width, y: clientY / canvas.height };
+        }
+
+        // --- Drawing Logic ---
+
+        function startDrawing(e) {
+            // Prevent drawing when clicking on UI controls
+            if (controlBox.contains(e.target) || e.target.id === 'bgBtn') return; 
+            
+            isDrawing = true;
+            currentLine = [];
+            const pos = getRelativeCoordinates(e);
+            currentLine.push(pos);
+            
+            // Draw initial dot with glow
+            ctx.beginPath();
+            ctx.arc(pos.x * canvas.width, pos.y * canvas.height, brushSize.value / 2, 0, Math.PI * 2);
+            ctx.fillStyle = colorPicker.value;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = colorPicker.value;
+            ctx.fill();
+            ctx.shadowBlur = 0; 
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            const pos = getRelativeCoordinates(e);
+            currentLine.push(pos);
+            drawLineLocally(currentLine, colorPicker.value, brushSize.value);
+        }
+
+        function stopDrawing(e) {
+            if (!isDrawing) return;
+            isDrawing = false;
+            
+            if (currentLine.length > 1) {
+                // Push the drawing data to Firebase Realtime Database
+                const newLineRef = canvasRef.push();
+                newLineRef.set({
+                    points: currentLine,
+                    color: colorPicker.value,
+                    size: brushSize.value
+                }).catch(err => console.error("Firebase Error: ", err));
+                myLineKeys.push(newLineRef.key); 
+            }
+        }
+
+        function drawLineLocally(points, color, size) {
+            if (points.length < 2) return;
+            ctx.beginPath();
+            
+            // Convert relative coordinates back to absolute pixels for current screen
+            let startX = points[points.length-2].x * canvas.width;
+            let startY = points[points.length-2].y * canvas.height;
+            let endX = points[points.length-1].x * canvas.width;
+            let endY = points[points.length-1].y * canvas.height;
+
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(endX, endY);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = size;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            
+            // Neon Glow Effect
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = color;
+            ctx.stroke();
+            ctx.shadowBlur = 0; 
+        }
+
+        function redrawAll(data) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (let key in data) {
+                let line = data[key];
+                if(line.points && line.points.length > 0){
+                    ctx.beginPath();
+                    ctx.moveTo(line.points[0].x * canvas.width, line.points[0].y * canvas.height);
+                    for (let i = 1; i < line.points.length; i++) {
+                        ctx.lineTo(line.points[i].x * canvas.width, line.points[i].y * canvas.height);
+                    }
+                    ctx.strokeStyle = line.color;
+                    ctx.lineWidth = line.size || 6;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    
+                    ctx.shadowBlur = 12;
+                    ctx.shadowColor = line.color;
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+            }
+        }
+
+        // --- Event Listeners ---
+        document.addEventListener('mousedown', startDrawing);
+        document.addEventListener('mousemove', draw);
+        document.addEventListener('mouseup', stopDrawing);
+        
+        document.addEventListener('touchstart', startDrawing, {passive: false});
+        document.addEventListener('touchmove', (e) => {
+            if(isDrawing) e.preventDefault(); // Prevent screen scrolling on mobile
+            draw(e);
+        }, {passive: false});
+        document.addEventListener('touchend', stopDrawing);
+
+        // --- Firebase Sync Listener ---
+        canvasRef.on('value', (snapshot) => {
+            const data = snapshot.val();
+            globalData = data; 
+            if (data) {
+                redrawAll(data);
+            } else {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        });
+
+        // --- Undo / Clear Controls ---
+        document.getElementById('undoBtn').addEventListener('click', () => {
+            if (myLineKeys.length > 0) {
+                let lastKey = myLineKeys.pop();
+                db.ref('shared_canvas/' + lastKey).remove(); 
+            }
+        });
+
+        document.getElementById('clearBtn').addEventListener('click', () => {
+            if(confirm("Are you sure you want to clear the entire canvas?")) {
+                canvasRef.remove(); 
+                myLineKeys = [];
+            }
+        });
+    </script>
+</body>
+</html>
